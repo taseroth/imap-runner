@@ -10,16 +10,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
-import javax.mail.FetchProfile;
-import javax.mail.Folder;
-import javax.mail.Message;
-import javax.mail.MessagingException;
-import javax.mail.Session;
-import javax.mail.URLName;
+import javax.mail.*;
 import javax.mail.internet.InternetAddress;
 import java.util.Properties;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * @author Bert
@@ -55,26 +49,15 @@ public class IMAPProducer implements Runnable {
 
         log.info("starting IMAP-producer");
 
-        IMAPFolder inbox = null;
+        IMAPFolder folder = null;
         try {
-
-            inbox = openFolder();
 
             //noinspection InfiniteLoopStatement
             while (true) {
 
-                boolean reconnect = fetchOfflineMessages(inbox);
-
-                if (!reconnect) {
-                    inbox = openFolder();
-                } else {
-                    // start idle command
-                    try {
-                        inbox.idle();
-                    } catch (MessagingException e) {
-                        inbox = openFolder();
-                    }
-                }
+                folder = fetchOfflineMessages(folder);
+                // start idle command
+                goIdle(folder);
 
             }
 
@@ -82,8 +65,8 @@ public class IMAPProducer implements Runnable {
             log.info("closing producer down");
         } finally {
             try {
-                if (inbox != null) {
-                    inbox.getStore().close();
+                if (folder != null) {
+                    folder.getStore().close();
                 }
             } catch (MessagingException e) {
                 log.error("error closing store", e);
@@ -91,12 +74,29 @@ public class IMAPProducer implements Runnable {
         }
     }
 
-    private boolean fetchOfflineMessages(IMAPFolder folder) throws InterruptedException {
+    private void goIdle(IMAPFolder folder) {
 
         try {
-            while (folder.getMessageCount() > 0) {
-                int fetchSize = Math.max(1, Math.min(queue.remainingCapacity(), folder.getMessageCount()));
-                log.debug("fetching {} messages for offline use", fetchSize);
+            folder.idle(true);
+        } catch (MessagingException | IllegalStateException e) {
+            log.warn("received error while attempting to IDLE", e);
+        }
+
+    }
+
+    private IMAPFolder fetchOfflineMessages(IMAPFolder folder) throws InterruptedException {
+
+        boolean keepOnFetching = true;
+
+        while (keepOnFetching) {
+
+            try {
+                folder = openFolder(folder);
+                int messageCount = folder.getUnreadMessageCount();
+                int fetchSize = Math.max(1, Math.min(queue.remainingCapacity(), messageCount));
+                keepOnFetching = messageCount > fetchSize;
+
+                log.debug("fetching {} messages of {} for offline use", fetchSize, messageCount);
 
                 Message messages[] = folder.getMessages(1, fetchSize);
                 folder.fetch(messages, fetchProfile);
@@ -109,35 +109,48 @@ public class IMAPProducer implements Runnable {
                             , message.getSubject()
                             , message.getSentDate()
                     ));
+
                 }
+            } catch (InterruptedException e) {
+                throw e;
+            } catch (Exception e) {
+                log.error("error fetching messages", e);
             }
-            return true;
-        } catch (InterruptedException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("error fetching messages", e);
-            return false;
         }
+        return folder;
     }
 
-    private IMAPFolder openFolder() throws InterruptedException {
-
-        IMAPFolder folder = null;
+    /**
+     * Re-opens the folder, re-connecting if necessary.
+     * Returns only after successfully opening the folder.
+     * @param folder existing folder
+     * @return connected folder
+     * @throws InterruptedException when interrupted while waiting to connect.
+     */
+    private IMAPFolder openFolder(IMAPFolder folder) throws InterruptedException {
 
         while (folder == null || !folder.isOpen()) {
             IMAPStore store = null;
 
             try {
-                Properties props = new Properties();
-                props.setProperty("mail.store.protocol", "imap");
 
-                Session session = Session.getInstance(props);
+                if (folder != null) {
+                    store = (IMAPStore) folder.getStore();
+                }
 
-                URLName urlName = new URLName("imap", "localhost", -1, "", "bert", password);
-                store = new IMAPStore(session, urlName);
+                if (store == null ||  ! store.isConnected()) {
+                    Properties props = new Properties();
+                    props.setProperty("mail.store.protocol", "imap");
 
-                log.info("connecting to IMAP");
-                store.connect();
+                    Session session = Session.getInstance(props);
+
+                    URLName urlName = new URLName("imap", "localhost", -1, "", "bert", password);
+                    store = new IMAPStore(session, urlName);
+
+                    log.info("connecting to IMAP");
+                    store.connect();
+                }
+
                 folder = (IMAPFolder) store.getFolder(folderName);
                 folder.open(Folder.READ_ONLY);
 
