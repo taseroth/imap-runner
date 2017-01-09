@@ -19,6 +19,7 @@ import javax.mail.URLName;
 import javax.mail.internet.InternetAddress;
 import java.util.Properties;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * @author Bert
@@ -35,6 +36,9 @@ public class IMAPProducer implements Runnable {
     @Value("${imap.password}")
     private String password;
 
+    @Value("${imap.folderName}")
+    private String folderName;
+
     @Autowired
     public IMAPProducer(@Qualifier("IMAPSourceQueue") BlockingQueue<OfflineIMAPMessage> queue) {
         this.queue = queue;
@@ -49,23 +53,26 @@ public class IMAPProducer implements Runnable {
     @Override
     public void run() {
 
+        log.info("starting IMAP-producer");
+
         IMAPFolder inbox = null;
         try {
 
-            inbox = openFolder("INBOX");
+            inbox = openFolder();
 
+            //noinspection InfiniteLoopStatement
             while (true) {
 
                 boolean reconnect = fetchOfflineMessages(inbox);
 
-                if (reconnect) {
-                    inbox = openFolder("INBOX");
+                if (!reconnect) {
+                    inbox = openFolder();
                 } else {
                     // start idle command
                     try {
                         inbox.idle();
                     } catch (MessagingException e) {
-                        inbox = openFolder("INBOX");
+                        inbox = openFolder();
                     }
                 }
 
@@ -88,7 +95,7 @@ public class IMAPProducer implements Runnable {
 
         try {
             while (folder.getMessageCount() > 0) {
-                int fetchSize = Math.max(1, queue.remainingCapacity());
+                int fetchSize = Math.max(1, Math.min(queue.remainingCapacity(), folder.getMessageCount()));
                 log.debug("fetching {} messages for offline use", fetchSize);
 
                 Message messages[] = folder.getMessages(1, fetchSize);
@@ -105,13 +112,15 @@ public class IMAPProducer implements Runnable {
                 }
             }
             return true;
-        } catch (MessagingException e) {
+        } catch (InterruptedException e) {
+            throw e;
+        } catch (Exception e) {
             log.error("error fetching messages", e);
             return false;
         }
     }
 
-    private IMAPFolder openFolder(String folderName) throws InterruptedException {
+    private IMAPFolder openFolder() throws InterruptedException {
 
         IMAPFolder folder = null;
 
