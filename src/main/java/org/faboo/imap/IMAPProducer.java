@@ -36,10 +36,8 @@ public class IMAPProducer implements Runnable {
 
     private Flags seenFlag;
 
-    @Value("${imap.password}")
     private String password;
 
-    @Value("${imap.source.folderName}")
     private String folderName;
 
     @Autowired
@@ -92,7 +90,6 @@ public class IMAPProducer implements Runnable {
         try {
             log.debug("going idle");
             folder.idle(true);
-            Thread.sleep(50);
         } catch (MessagingException | IllegalStateException e) {
             log.warn("received error while attempting to IDLE", e);
         }
@@ -108,11 +105,10 @@ public class IMAPProducer implements Runnable {
             try {
                 folder = openFolder(folder);
 
-                log.info("fetching messages for offline use");
 
                 Message messages[] = folder.getSortedMessages(sortTerms, searchTerm);
                 folder.fetch(messages, fetchProfile);
-                log.debug("fetched {} messages", messages.length);
+                log.info("fetched {} messages for offline use", messages.length);
 
                 for (Message message : messages) {
                     queue.put(new OfflineIMAPMessage(
@@ -181,7 +177,16 @@ public class IMAPProducer implements Runnable {
                 Thread.sleep(1000);
             }
         }
-
         return folder;
+    }
+
+    @Value("${imap.password}")
+    public void setPassword(String password) {
+        this.password = password;
+    }
+
+    @Value("${imap.source.folderName}")
+    public void setFolderName(String folderName) {
+        this.folderName = folderName;
     }
 }

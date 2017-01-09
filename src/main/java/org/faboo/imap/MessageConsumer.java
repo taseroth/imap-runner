@@ -23,7 +23,6 @@ public class MessageConsumer implements Runnable, NeedsCleanUpBeforeEnd {
 
     private AtomicBoolean keepRunning = new AtomicBoolean(true);
 
-    @Value("${imap.target.folderName}")
     private String targetFolderName;
 
     private final BlockingQueue<OfflineIMAPMessage> queue;
@@ -61,5 +60,11 @@ public class MessageConsumer implements Runnable, NeedsCleanUpBeforeEnd {
     public void signalStop() {
         log.info("received shutdown command");
         keepRunning.set(false);
+    }
+
+
+    @Value("${imap.target.folderName}")
+    public void setTargetFolderName(String targetFolderName) {
+        this.targetFolderName = targetFolderName;
     }
 }
